@@ -22,6 +22,10 @@ You can install `reflink_dedupe` via my [**FreeBSD ports repository**](https://g
 
 ```{sh}
 git clone https://github.com/Dark3clipse/freebsd-ports.git /usr/local/freebsd-ports
+mkdir -p /usr/ports/local/devel
+mkdir -p /usr/ports/local/sysutils
+ln -s /usr/local/freebsd-ports/devel/docopts /usr/ports/local/devel/docopts
+ln -s /usr/local/freebsd-ports/sysutils/reflink_dedupe /usr/ports/local/sysutils/reflink_dedupe
 cd /usr/local/freebsd-ports/sysutils/reflink_dedupe
 sudo make install clean
 sudo cp /usr/local/etc/reflink_dedupe.conf.sample /usr/local/etc/reflink_dedupe.conf
