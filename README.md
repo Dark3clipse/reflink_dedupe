@@ -18,7 +18,9 @@
 
 ## Installation
 
-You can install `reflink_dedupe` via my [**FreeBSD ports repository**](https://github.com/Dark3clipse/freebsd-ports):
+You can install `reflink_dedupe` via my [**FreeBSD ports repository**](https://github.com/Dark3clipse/freebsd-ports). 
+
+> Note: Ensure you have the ports tree installed (refer to the freebsd ports directory for instructions).
 
 ```{sh}
 git clone https://github.com/Dark3clipse/freebsd-ports.git /usr/local/freebsd-ports
