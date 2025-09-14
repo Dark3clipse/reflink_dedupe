@@ -21,7 +21,7 @@ Options:
       -h, --help            Show help options.
       -V, --version         Print program version.
 ----
-reflink_dedupe 1.0.0
+reflink_dedupe 0.9.0
 Copyright (C) 2025 Sophia Hadash
 Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
