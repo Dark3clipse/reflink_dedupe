@@ -24,7 +24,7 @@ You can install `reflink_dedupe` via my [**FreeBSD ports repository**](https://g
 git clone https://github.com/Dark3clipse/freebsd-ports.git /usr/local/freebsd-ports
 cd /usr/local/freebsd-ports/sysutils/reflink_dedupe
 sudo make install clean
-sudo cp /usr/local/etc/reflink_dedupe.conf.sample /etc/reflink_dedupe.conf
+sudo cp /usr/local/etc/reflink_dedupe.conf.sample /usr/local/etc/reflink_dedupe.conf
 ```
 
 Don't forget to edit your configuration file to your needs!
@@ -84,7 +84,7 @@ sudo service reflink_dedupe start
 
 ## Configuration
 
-`reflink_dedupe` uses the configuration file located at `/etc/reflink_dedupe.conf`.
+`reflink_dedupe` uses the configuration file located at `/usr/local/etc/reflink_dedupe.conf`.
 
 Lines beginning with # are comments. The default configuration contains sections for general settings, logging, operation modes, and watcher settings.
 

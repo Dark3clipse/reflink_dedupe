@@ -16,7 +16,7 @@ name="reflink_dedupe"
 rcvar="reflink_dedupe_enable"
 
 # Customize if you change the path
-command="/bin/reflink_dedupe"
+command="/usr/local/bin/reflink_dedupe"
 pidfile="/var/run/reflink_dedupe.pid"
 command_args="--daemon --watcher"
 

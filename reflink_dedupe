@@ -143,11 +143,11 @@ normalize_watch_paths() {
 
   echo "$result"
 }
-if [ ! -f /etc/reflink_dedupe.conf ]; then
-  echo "No config found at /etc/reflink_dedupe.conf. You can view a sample at /usr/local/etc/reflink_dedupe.conf.sample"
+if [ ! -f /usr/local/etc/reflink_dedupe.conf ]; then
+  echo "No config found at /usr/local/etc/reflink_dedupe.conf. You can view a sample at /usr/local/etc/reflink_dedupe.conf.sample"
   exit 1
 fi
-eval "$(parse_config /etc/reflink_dedupe.conf)"
+eval "$(parse_config /usr/local/etc/reflink_dedupe.conf)"
 
 # derived configuration
 CFG_PGID_FILE="${CFG_TMP_DIR}/pgids_to_kill"
