@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# PROVIDE: reflink_dedupe
+# REQUIRE: DAEMON
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="reflink_dedupe"
+rcvar="reflink_dedupe_enable"
+
+# Customize if you change the path
+command="/bin/reflink_dedupe"
+pidfile="/var/run/reflink_dedupe.pid"
+command_args="--daemon --watcher"
+
+load_rc_config $name
+: ${reflink_dedupe_enable:="NO"}
+
+run_rc_command "$1"
