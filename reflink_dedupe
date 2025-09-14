@@ -143,7 +143,10 @@ normalize_watch_paths() {
 
   echo "$result"
 }
-
+if [ ! -f /etc/reflink_dedupe.conf ]; then
+  echo "No config found at /etc/reflink_dedupe.conf. Have you modified and renamed the sample at /etc/reflink_dedupe.conf.sample ?"
+  exit 1
+fi
 eval "$(parse_config /etc/reflink_dedupe.conf)"
 
 # derived configuration
