@@ -44,8 +44,8 @@ else
     FSWATCH_CMD=""
 fi
 if [ $watcher -eq 1 ] && [ ! -n "$FSWATCH_CMD" ]; then
-  echo "ERROR: Option --watcher requires fswatch. Please reinstall with make option WITH_WATCHER=yes."
-  exit 1
+  echo "WARN: Option --watcher requires fswatch. Please reinstall with make option WITH_WATCHER=yes. Disabled"
+  watcher=0
 fi
 
 
