@@ -38,6 +38,15 @@ if [ $daemon -eq 1 ] && [ $oneshot -eq 1 ]; then
   echo "ERROR: Options --daemon and --oneshot are mutually exclusive."
   exit 1
 fi
+if command -v fswatch >/dev/null 2>&1; then
+    FSWATCH_CMD=$(command -v fswatch)
+else
+    FSWATCH_CMD=""
+fi
+if [ $watcher -eq 1 ] && [ ! -n "$FSWATCH_CMD" ]; then
+  echo "ERROR: Option --watcher requires fswatch. Please reinstall with make option WITH_WATCHER=yes."
+  exit 1
+fi
 
 
 
@@ -136,11 +145,24 @@ normalize_watch_paths() {
 }
 
 eval "$(parse_config /etc/reflink_dedupe.conf)"
+
+# derived configuration
 CFG_PGID_FILE="${CFG_TMP_DIR}/pgids_to_kill"
 CFG_CONFLICTS_FILE="${CFG_TMP_DIR}/conflicts"
 CFG_WATCH_PATHS_ABS=$(normalize_watch_paths "$CFG_DEDUPLICATION_ROOT" "$CFG_WATCH_PATHS")
 if [ "$CFG_THREADS" == "" ]; then
   CFG_THREADS="$(sysctl -n hw.ncpu)"
+fi
+if [ $CFG_STATISTICS_ZPOOL_MONITOR_ENABLED -eq 1 ]; then
+  if command -v zpool >/dev/null 2>&1; then
+    ZPOOL_CMD=$(command -v zpool)
+  else
+    ZPOOL_CMD=""
+  fi
+  if [ ! -n "$ZPOOL_CMD" ]; then
+    log_important "Zpool monitoring enabled in configuration, but zfs not found in system. Disabled."
+    CFG_STATISTICS_ZPOOL_MONITOR_ENABLED=0
+  fi
 fi
 
 # Print all parsed values and exit (debug mode)
@@ -308,7 +330,7 @@ mkdir -p "$(dirname "$CFG_LOG_FILE_ACTIONS")"
 # Save original stdout to FD 3
 exec 3>&1
 
-# Safety: prevent accidental truncation with >
+# Disable noclobber
 set +o noclobber
 
 log() {
@@ -2198,6 +2220,9 @@ watcher() {
 ### === STATISTICS === ###
 monitor_zpool() {
   if [ $CFG_STATISTICS_ZPOOL_MONITOR_ENABLED -eq 0 ] || [ -z "$CFG_STATISTICS_ZPOOL_MONITOR_ZPOOL" ] ; then
+    return
+  fi
+  if ! [ -n "$CFG_STATISTICS_ZPOOL_MONITOR_ZPOOL" ] || ! zpool list "$CFG_STATISTICS_ZPOOL_MONITOR_ZPOOL" >/dev/null 2>&1; then
     return
   fi
 
