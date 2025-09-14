@@ -7,7 +7,7 @@
 # Licensed under the BSD 2-Clause License. See LICENSE file for details.
 
 ### === COMMAND OPTIONS === ###
-parsed="$(./docopts -V - -h - : "$@" <<EOF
+parsed="$(docopts -V - -h - : "$@" <<EOF
 Usage:
   reflink_dedupe [options]...
 
