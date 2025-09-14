@@ -1,5 +1,10 @@
 #!/usr/local/bin/bash
-
+# reflink_dedupe - A FreeBSD utility for deduplication using reflinks.
+#
+# Copyright (c) 2025, Sophia Hadash
+# All rights reserved.
+#
+# Licensed under the BSD 2-Clause License. See LICENSE file for details.
 
 ### === COMMAND OPTIONS === ###
 parsed="$(./docopts -V - -h - : "$@" <<EOF
@@ -18,7 +23,7 @@ Options:
 ----
 reflink_dedupe 1.0.0
 Copyright (C) 2025 Sophia Hadash
-License PROPRIETARY
+Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
 There is NO WARRANTY, to the extent permitted by law.
 EOF

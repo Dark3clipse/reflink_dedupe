@@ -1,4 +1,10 @@
 #!/bin/sh
+# reflink_dedupe - A FreeBSD utility for deduplication using reflinks.
+#
+# Copyright (c) 2025, Sophia Hadash
+# All rights reserved.
+#
+# Licensed under the BSD 2-Clause License. See LICENSE file for details.
 
 # PROVIDE: reflink_dedupe
 # REQUIRE: DAEMON
