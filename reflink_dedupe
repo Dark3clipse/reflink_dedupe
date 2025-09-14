@@ -2244,7 +2244,7 @@ monitor_zpool() {
 schedule_deduplication() {
   echo "1" > "$TMP_DIR/schedule_deduplication"
 
-  schedule_task indexing initial_indexing --max-count 0 --max-cores $TASK_THREADS --skip
+  schedule_task indexing initial_indexing --max-count 0 --max-cores $TASK_THREADS
   init_indexing_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
   init_indexing_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
   log "Task indexing scheduled with PID $init_indexing_pid PGID $init_indexing_pgid"
@@ -2254,7 +2254,7 @@ schedule_deduplication() {
   export init_indexing_pgid
   (
     wait_for_pgid $init_indexing_pgid
-    schedule_task find-duplicates find_duplicates --max-count 0 --max-cores $TASK_THREADS --skip
+    schedule_task find-duplicates find_duplicates --max-count 0 --max-cores $TASK_THREADS
     find_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
     find_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
     log "Task find-duplicates scheduled with PID $find_duplicates_pid PGID $find_duplicates_pgid"
