@@ -26,13 +26,13 @@ sudo make install clean
 
 ### Optional Features
 
-FSWATCH: Enable live monitoring of directories using fswatch
+WATCHER: Enable live monitoring of directories using fswatch
 
 ```{sh}
 sudo make install WITH_WATCHER=yes
 ```
 
-ZPOOL: Enable ZFS pool integration (disabled by default)
+ZFS: Enable ZFS pool integration (disabled by default)
 
 ```{sh}
 sudo make install WITH_ZFS=yes
