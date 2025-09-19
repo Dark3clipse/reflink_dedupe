@@ -18,3 +18,9 @@ make clean
 make fetch
 make reinstall clean
 ```
+
+Add package to repo:
+```
+cp ./work/pkg/docopts-0.6.4.pkg /zpool/kirby/server/static/generic/freebsd-repo/
+pkg repo /zpool/kirby/server/static/generic/freebsd-repo/
+```
