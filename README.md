@@ -2,7 +2,7 @@
 
 `reflink_dedupe` is a FreeBSD utility for deduplicating files on filesystems that support copy-on-write reflinks. It efficiently finds duplicate files, replaces them with reflinks, and can optionally monitor directories for live deduplication.
 
-> ⚠️ **Experimental software**: `reflink_dedupe` is in active development. While care has been taken in writing the reflinking functionality, **use at your own risk**. The author is **not responsible for any data loss**.
+> ⚠️ **Experimental software**: `reflink_dedupe` is in active development. While great care has been taken in ensuring the reflinking functionality cannot cause data loss, **use at your own risk**. The author is **not responsible for any data loss**.
 
 ## Features
 
@@ -13,10 +13,32 @@
 - **Live monitoring**: Watch directories and subdirectories within the deduplication root for changes and automatically deduplicate new or modified files.
 - **Multi-threading**: Perform deduplication in parallel for faster processing on large datasets.
 - **Statistics collection**: Track the number of reflinks created and the total space saved (in bytes).
+- **Conflict management**: In the unlikely event of conflicts, they are renamed and added to a list for manual repair.
 
 ---
 
 ## Installation
+
+### Using mediarr repository
+
+Add mediarr repository to your system:
+```
+mkdir -p /usr/local/etc/pkg/repos
+cat <<EOF> /usr/local/etc/pkg/repos/mediarr.conf
+mediarr: {
+  url: "https://static.mediarr.org/freebsd-repo",
+  enabled: yes
+}
+EOF
+```
+
+Install package:
+```
+pkg update
+pkg install reflink_dedupe
+```
+
+### Using make
 
 You can install `reflink_dedupe` via my [**FreeBSD ports repository**](https://github.com/Dark3clipse/freebsd-ports). 
 
@@ -35,7 +57,7 @@ sudo cp /usr/local/etc/reflink_dedupe.conf.sample /usr/local/etc/reflink_dedupe.
 
 Don't forget to edit your configuration file to your needs!
 
-### Optional Features
+#### Optional Features
 
 WATCHER: Enable live monitoring of directories using fswatch
 
