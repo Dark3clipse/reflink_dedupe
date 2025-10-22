@@ -20,6 +20,13 @@ make fetch
 make reinstall clean
 ```
 
+Build package
+```
+make check-plist
+make stage-qa
+make package
+```
+
 Add package to repo:
 ```
 cp ./work/pkg/docopts-0.6.4.pkg /zpool/kirby/server/static/generic/freebsd-repo/
