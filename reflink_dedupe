@@ -18,10 +18,11 @@ Options:
       -i, --interactive     Show an interactive overview screen.
           --print-args      Print command arguments and exit.
           --print-config    Print configuration and exit.
+          --schedule        Schedule an execution now. Another instance must be running in daemon mode for this to work.
       -h, --help            Show help options.
       -V, --version         Print program version.
 ----
-reflink_dedupe 0.9.0
+reflink_dedupe 0.9.1
 Copyright (C) 2025 Sophia Hadash
 Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
@@ -36,6 +37,22 @@ if [ $print_args == 1 ]; then
 fi
 if [ $daemon -eq 1 ] && [ $oneshot -eq 1 ]; then
   echo "ERROR: Options --daemon and --oneshot are mutually exclusive."
+  exit 1
+fi
+if [ $schedule -eq 1 ] && [ $oneshot -eq 1 ]; then
+  echo "ERROR: Options --schedule and --oneshot are mutually exclusive."
+  exit 1
+fi
+if [ $schedule -eq 1 ] && [ $daemon -eq 1 ]; then
+  echo "ERROR: Options --schedule and --daemon are mutually exclusive."
+  exit 1
+fi
+if [ $schedule -eq 1 ] && [ $interactive -eq 1 ]; then
+  echo "ERROR: Options --schedule and --interactive are mutually exclusive."
+  exit 1
+fi
+if [ $schedule -eq 1 ] && [ $watcher -eq 1 ]; then
+  echo "ERROR: Options --schedule and --watcher are mutually exclusive."
   exit 1
 fi
 if command -v fswatch >/dev/null 2>&1; then
@@ -64,11 +81,21 @@ parse_config() {
       defaults["THREADS"]=""
       defaults["TMP_DIR"]="/tmp/reflink_dedupe"
       defaults["LOCK_DIR"]="/var/lock/reflink_dedupe"
+      defaults["FIND_DUPLICATES_BATCH_SIZE"]="1000"
+      defaults["SCHEDULE_INDEXING_MAX_COUNT"]="0"
+      defaults["SCHEDULE_INDEXING_MAX_DURATION"]="0"
+      defaults["SCHEDULE_INDEXING_SKIP"]="0"
+      defaults["SCHEDULE_FIND_DUPLICATES_MAX_COUNT"]="0"
+      defaults["SCHEDULE_FIND_DUPLICATES_MAX_DURATION"]="0"
+      defaults["SCHEDULE_FIND_DUPLICATES_SKIP"]="0"
+      defaults["SCHEDULE_REFLINKING_MAX_COUNT"]="0"
+      defaults["SCHEDULE_REFLINKING_MAX_DURATION"]="0"
+      defaults["SCHEDULE_REFLINKING_SKIP"]="0"
+      defaults["DASHBOARD_FILE"]="/var/log/reflink_dedupe/dashboard.log"
       defaults["LOG_FILE"]="/var/log/reflink_dedupe/info.log"
       defaults["LOG_FILE_IMPORTANT"]="/var/log/reflink_dedupe/important.log"
       defaults["LOG_FILE_ERRORS"]="/var/log/reflink_dedupe/errors.log"
       defaults["LOG_FILE_ACTIONS"]="/var/log/reflink_dedupe/actions.log"
-      defaults["PORT"]="8960"
       defaults["DRY_RUN"]="1"
       defaults["WATCH_PATHS"]=""
       defaults["WATCHER_DEBOUNCE_SECONDS"]="60"
@@ -179,6 +206,17 @@ if [ $print_config -eq 1 ]; then
   echo "THREADS=$CFG_THREADS"
   echo "TMP_DIR=$CFG_TMP_DIR"
   echo "LOCK_DIR=$CFG_LOCK_DIR"
+  echo "FIND_DUPLICATES_BATCH_SIZE=$CFG_FIND_DUPLICATES_BATCH_SIZE"
+  echo "SCHEDULE_INDEXING_MAX_COUNT=$CFG_SCHEDULE_INDEXING_MAX_COUNT"
+  echo "SCHEDULE_INDEXING_MAX_DURATION=$CFG_SCHEDULE_INDEXING_MAX_DURATION"
+  echo "SCHEDULE_INDEXING_SKIP=$CFG_SCHEDULE_INDEXING_SKIP"
+  echo "SCHEDULE_FIND_DUPLICATES_MAX_COUNT=$CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT"
+  echo "SCHEDULE_FIND_DUPLICATES_MAX_DURATION=$CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION"
+  echo "SCHEDULE_FIND_DUPLICATES_SKIP=$CFG_SCHEDULE_FIND_DUPLICATES_SKIP"
+  echo "SCHEDULE_REFLINKING_MAX_COUNT=$CFG_SCHEDULE_REFLINKING_MAX_COUNT"
+  echo "SCHEDULE_REFLINKING_MAX_DURATION=$CFG_SCHEDULE_REFLINKING_MAX_DURATION"
+  echo "SCHEDULE_REFLINKING_SKIP=$CFG_SCHEDULE_REFLINKING_SKIP"
+  echo "DASHBOARD_FILE=$CFG_DASHBOARD_FILE"
   echo "LOG_FILE=$CFG_LOG_FILE"
   echo "LOG_FILE_IMPORTANT=$CFG_LOG_FILE_IMPORTANT"
   echo "LOG_FILE_ERRORS=$CFG_LOG_FILE_ERRORS"
@@ -190,10 +228,37 @@ if [ $print_config -eq 1 ]; then
   echo "WATCH_THREADS=$CFG_WATCH_THREADS"
   echo "CONFLICTS_FILE=$CFG_CONFLICTS_FILE"
   echo "PGID_FILE=$CFG_PGID_FILE"
-  echo "PORT=$CFG_PORT"
   echo "STATISTICS_ZPOOL_MONITOR_ENABLED=$CFG_STATISTICS_ZPOOL_MONITOR_ENABLED"
   echo "STATISTICS_ZPOOL_MONITOR_ZPOOL=$CFG_STATISTICS_ZPOOL_MONITOR_ZPOOL"
   exit 0
+fi
+
+### === SCHEDULE === ###
+if [ $schedule -eq 1 ]; then
+  if [ ! -f "$CFG_PID_FILE" ] || [ ! -f "$CFG_TMP_DIR/schedule_deduplication" ]; then
+    echo "reflink_dedupe is not running."
+    exit 1
+  fi
+  STATE=$(cat "$CFG_TMP_DIR/schedule_deduplication")
+  case $STATE in
+    0)
+      echo "1" > "$CFG_TMP_DIR/schedule_deduplication"
+      echo "Execution is successfully scheduled."
+      exit 0
+      ;;
+    1)
+      echo "Execution is already scheduled."
+      exit 1
+      ;;
+    2)
+      echo "Execution is already in progress."
+      exit 1
+      ;;
+    *)
+      echo "Failed to interpret schedule file."
+      exit 1
+      ;;
+  esac
 fi
 
 
@@ -322,6 +387,7 @@ trap 'cleanup' INT TERM
 trap 'cleanup' EXIT
 cleanup_tmp_files
 mkdir -p "$CFG_TMP_DIR"
+mkdir -p "$CFG_LOCK_DIR"
 
 
 ### === LOGGING === ###
@@ -331,7 +397,15 @@ mkdir -p "$(dirname "$CFG_LOG_FILE_ERRORS")"
 mkdir -p "$(dirname "$CFG_LOG_FILE_ACTIONS")"
 
 # Save original stdout to FD 3
-exec 3>&1
+if [ "$CFG_DASHBOARD_FILE" != "" ]; then
+  if [ $interactive -eq 1 ]; then
+    exec 3> >(awk '{print > "/dev/tty";gsub(/\x00/, "");gsub(/\033\[[0-9;]*[A-Za-z]/, "");print >> file}' file="$CFG_DASHBOARD_FILE")
+  else
+    exec 3> >(awk '{gsub(/\x00/, "");gsub(/\033\[[0-9;]*[A-Za-z]/, "");print >> file}' file="$CFG_DASHBOARD_FILE")
+  fi
+else
+  exec 3>&1
+fi
 
 # Disable noclobber
 set +o noclobber
@@ -427,7 +501,6 @@ CREATE INDEX IF NOT EXISTS idx_duplicates_duplicate ON duplicates(duplicate);
 EOF
 }
 sqlite_write() {
-  mkdir -p "$CFG_LOCK_DIR"
   flock "$CFG_LOCK_DIR/sqlite_write.lock" bash -c '
         sqlite3 -cmd ".timeout 5000" "'"$CFG_DB"'" "'"$1"'"
   '
@@ -568,6 +641,7 @@ format_duration() {
 mkdir -p "$CFG_TMP_DIR/statistics"
 print_dashboard() {
     tput clear >&3
+    if [ "$CFG_DASHBOARD_FILE" != "" ]; then echo -n "" > "$CFG_DASHBOARD_FILE"; fi
     {
       echo "Statistics:"
       shopt -s nullglob
@@ -797,7 +871,7 @@ schedule_task() {
     # generic exports
     export -f update_task_state decrement_counter increment_counter log log_important log_actions sqlite_write hash_file get_metadata set_metadata increment_metadata add_pgid remove_pgid pgid_is_active kill_tree
     PARENT_PID=$$
-    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS
+    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS CFG_FIND_DUPLICATES_BATCH_SIZE
 
     # export tasks
     export -f initial_indexing find_duplicates watcher
@@ -1077,7 +1151,7 @@ find_duplicates() {
   local max_cores="1" # task is single-threaded
   local skip="$5"
   shift 5
-  local BATCH_SIZE=1000
+  local BATCH_SIZE=$CFG_FIND_DUPLICATES_BATCH_SIZE
   local task_start_time=$(date +%s)
   local processed=0
 
@@ -2242,33 +2316,36 @@ monitor_zpool() {
 
 ### === MAIN === ###
 schedule_deduplication() {
-  echo "1" > "$TMP_DIR/schedule_deduplication"
+  echo "2" > "$CFG_TMP_DIR/schedule_deduplication"
 
-  schedule_task indexing initial_indexing --max-count 0 --max-cores $TASK_THREADS
+  skip=""; if [ $CFG_SCHEDULE_INDEXING_SKIP -eq 1 ]; then skip="--skip"; fi
+  schedule_task indexing initial_indexing --max-count $CFG_SCHEDULE_INDEXING_MAX_COUNT --max-duration $CFG_SCHEDULE_INDEXING_MAX_DURATION --max-cores $TASK_THREADS $skip
   init_indexing_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
   init_indexing_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
   log "Task indexing scheduled with PID $init_indexing_pid PGID $init_indexing_pgid"
 
   # schedule find-duplicates
   export -f wait_for_pgid
-  export init_indexing_pgid
+  export init_indexing_pgid CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION CFG_SCHEDULE_FIND_DUPLICATES_SKIP CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP
   (
     wait_for_pgid $init_indexing_pgid
-    schedule_task find-duplicates find_duplicates --max-count 0 --max-cores $TASK_THREADS
+    skip=""; if [ $CFG_SCHEDULE_FIND_DUPLICATES_SKIP -eq 1 ]; then skip="--skip"; fi
+    schedule_task find-duplicates find_duplicates --max-count $CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT --max-duration $CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION --max-cores $TASK_THREADS $skip
     find_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
     find_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
     log "Task find-duplicates scheduled with PID $find_duplicates_pid PGID $find_duplicates_pgid"
 
-    export find_duplicates_pid
+    export find_duplicates_pid CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP
     (
       wait_for_pgid $find_duplicates_pgid
-      schedule_task reflink-duplicates reflink_duplicates --max-count 0 --max-cores $TASK_THREADS
+      skip=""; if [ $CFG_SCHEDULE_REFLINKING_SKIP -eq 1 ]; then skip="--skip"; fi
+      schedule_task reflink-duplicates reflink_duplicates --max-count $CFG_SCHEDULE_REFLINKING_MAX_COUNT --max-duration $CFG_SCHEDULE_REFLINKING_MAX_DURATION --max-cores $TASK_THREADS $skip
       reflink_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
       reflink_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
       log "Task reflink-duplicates scheduled with PID $reflink_duplicates_pid PGID $reflink_duplicates_pgid"
 
       wait_for_pgid $reflink_duplicates_pgid
-      echo "0" > "$TMP_DIR/schedule_deduplication"
+      echo "0" > "$CFG_TMP_DIR/schedule_deduplication"
 
       if [ $oneshot -eq 1 ]; then
         cleanup
@@ -2320,7 +2397,7 @@ main() {
   if [ $daemon -eq 0 ]; then
     schedule_deduplication
   else
-    echo "0" > "$TMP_DIR/schedule_deduplication"
+    echo "0" > "$CFG_TMP_DIR/schedule_deduplication"
   fi
 
   # main daemon loop
@@ -2329,33 +2406,29 @@ main() {
     loop_start=$(date +%s%N 2>/dev/null || date +%s000000000)
 
     # update conflicts, monitor zpool, and print dashboard
-    if [ $interactive -eq 1 ]; then
-      # Run tasks in parallel, each in background
-      monitor_zpool &
-      pid1=$!
-      counter_reload_conflicts=$((counter_reload_conflicts+1))
-      if [ $counter_reload_conflicts -ge 60 ]; then
-        load_conflicts &
-        pid2=$!
-      fi
-      print_dashboard >&3 &
-      pid3=$!
-
-      # Wait for all tasks to finish
-      wait $pid1
-      if [ $counter_reload_conflicts -ge 60 ]; then
-        wait $pid2
-        counter_reload_conflicts=0
-      fi
-      wait $pid3
+    # Run tasks in parallel, each in background
+    monitor_zpool &
+    pid1=$!
+    counter_reload_conflicts=$((counter_reload_conflicts+1))
+    if [ $counter_reload_conflicts -ge 60 ]; then
+      load_conflicts &
+      pid2=$!
     fi
 
+    print_dashboard >&3 &
+    pid3=$!
+
+    # Wait for all tasks to finish
+    wait $pid1
+    if [ $counter_reload_conflicts -ge 60 ]; then
+      wait $pid2
+      counter_reload_conflicts=0
+    fi
+    wait $pid3
+
     # watch for external triggers
-    if [ -f "$TMP_DIR/trigger" ]; then
-      if [ "$(cat "$TMP_DIR/schedule_deduplication")" == "0" ]; then
-        schedule_deduplication
-      fi
-      rm -f "$TMP_DIR/trigger"
+    if [ "$(cat "$CFG_TMP_DIR/schedule_deduplication")" == "1" ]; then
+      schedule_deduplication
     fi
 
     # Compute elapsed time in ms

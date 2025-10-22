@@ -13,6 +13,7 @@ Reinstall v0.9.0
 ```
 cd /usr/ports/local/sysutils/reflink_dedupe
 rm -f /usr/ports/distfiles/Dark3clipse-reflink_dedupe-0.9.0-v0.9.0_GH0.tar.gz
+make clean distclean
 make makesum
 make clean
 make fetch
