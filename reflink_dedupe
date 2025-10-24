@@ -2780,6 +2780,7 @@ schedule_deduplication() {
   ) &
 }
 main() {
+  trap 'cleanup' INT TERM
   log "Starting ZFS dedupe daemon..."
 
   # init db
