@@ -20,6 +20,8 @@ command="/usr/local/bin/reflink_dedupe"
 pidfile="/var/run/reflink_dedupe.pid"
 command_args="--daemon --watcher"
 
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 load_rc_config $name
 : ${reflink_dedupe_enable:="NO"}
 
