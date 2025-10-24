@@ -172,6 +172,8 @@ To start the daemon immediatelly:
 sudo service reflink_dedupe start
 ```
 
+> Note: make sure to configure your cron job schedule here: `/usr/local/etc/cron.d/reflink_dedupe.cron`.
+
 ## Configuration
 
 `reflink_dedupe` uses the configuration file located at `/usr/local/etc/reflink_dedupe.conf`.
@@ -244,6 +246,15 @@ WATCH_THREADS="1"                          # Threads for fs watching
 - REFLINK_CMD should create a copy-on-write reflink; defaults to cp.
 - THREADS controls multi-threading.
 - WATCH_PATHS and watcher settings are used if live monitoring is enabled.
+
+### Cron job
+
+A cron job is used to schedule the executions of this utility in daemon mode. You can find the cronjob defined here: `/usr/local/etc/cron.d/reflink_dedupe.cron`
+
+Default:
+```
+0 2 1 * * root /usr/local/bin/reflink_dedupe --schedule 2>&1
+```
 
 ## Dependencies
 
