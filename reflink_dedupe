@@ -394,7 +394,6 @@ cleanup() {
   exit 0
 }
 trap 'cleanup' INT TERM
-trap 'cleanup' EXIT
 cleanup_tmp_files
 mkdir -p "$CFG_TMP_DIR"
 mkdir -p "$CFG_LOCK_DIR"
@@ -773,7 +772,9 @@ print_statistics() {
   done
 }
 print_dashboard() {
-    tput clear >&3
+    if [ $daemon -eq 0 ]; then
+      tput clear >&3
+    fi
     if [ "$CFG_DASHBOARD_FILE" != "" ]; then echo -n "" > "$CFG_DASHBOARD_FILE"; fi
     {
       echo "Statistics:"
@@ -2876,7 +2877,13 @@ if [ -f "$CFG_PID_FILE" ]; then
     exit 1
   fi
 fi
-echo $$ > "$CFG_PID_FILE"
 
 # execute main
-main
+mkdir -p /var/run
+if [ $daemon -eq 1 ]; then
+  main &
+  echo $! > "$CFG_PID_FILE"
+else
+  echo $$ > "$CFG_PID_FILE"
+  main
+fi
