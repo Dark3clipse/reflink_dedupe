@@ -19,6 +19,7 @@ rcvar="reflink_dedupe_enable"
 command="/usr/local/bin/reflink_dedupe"
 pidfile="/var/run/reflink_dedupe.pid"
 command_args="--daemon --watcher"
+command_background="yes"
 
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
