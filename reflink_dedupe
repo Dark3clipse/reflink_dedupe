@@ -22,7 +22,7 @@ Options:
       -h, --help            Show help options.
       -V, --version         Print program version.
 ----
-reflink_dedupe 0.9.1
+reflink_dedupe 0.9.2
 Copyright (C) 2025 Sophia Hadash
 Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
@@ -81,7 +81,11 @@ parse_config() {
       defaults["THREADS"]=""
       defaults["TMP_DIR"]="/tmp/reflink_dedupe"
       defaults["LOCK_DIR"]="/var/lock/reflink_dedupe"
+      defaults["CLEAN_BATCH_SIZE"]="100"
       defaults["FIND_DUPLICATES_BATCH_SIZE"]="1000"
+      defaults["SCHEDULE_CLEAN_MAX_COUNT"]="0"
+      defaults["SCHEDULE_CLEAN_MAX_DURATION"]="0"
+      defaults["SCHEDULE_CLEAN_SKIP"]="0"
       defaults["SCHEDULE_INDEXING_MAX_COUNT"]="0"
       defaults["SCHEDULE_INDEXING_MAX_DURATION"]="0"
       defaults["SCHEDULE_INDEXING_SKIP"]="0"
@@ -92,6 +96,7 @@ parse_config() {
       defaults["SCHEDULE_REFLINKING_MAX_DURATION"]="0"
       defaults["SCHEDULE_REFLINKING_SKIP"]="0"
       defaults["DASHBOARD_FILE"]="/var/log/reflink_dedupe/dashboard.log"
+      defaults["REPORTS_FILE"]="/var/log/reflink_dedupe/reports.log"
       defaults["LOG_FILE"]="/var/log/reflink_dedupe/info.log"
       defaults["LOG_FILE_IMPORTANT"]="/var/log/reflink_dedupe/important.log"
       defaults["LOG_FILE_ERRORS"]="/var/log/reflink_dedupe/errors.log"
@@ -206,7 +211,11 @@ if [ $print_config -eq 1 ]; then
   echo "THREADS=$CFG_THREADS"
   echo "TMP_DIR=$CFG_TMP_DIR"
   echo "LOCK_DIR=$CFG_LOCK_DIR"
+  echo "CLEAN_BATCH_SIZE=$CFG_CLEAN_BATCH_SIZE"
   echo "FIND_DUPLICATES_BATCH_SIZE=$CFG_FIND_DUPLICATES_BATCH_SIZE"
+  echo "SCHEDULE_CLEAN_MAX_COUNT=$CFG_SCHEDULE_CLEAN_MAX_COUNT"
+  echo "SCHEDULE_CLEAN_MAX_DURATION=$CFG_SCHEDULE_CLEAN_MAX_DURATION"
+  echo "SCHEDULE_CLEAN_SKIP=$CFG_SCHEDULE_CLEAN_SKIP"
   echo "SCHEDULE_INDEXING_MAX_COUNT=$CFG_SCHEDULE_INDEXING_MAX_COUNT"
   echo "SCHEDULE_INDEXING_MAX_DURATION=$CFG_SCHEDULE_INDEXING_MAX_DURATION"
   echo "SCHEDULE_INDEXING_SKIP=$CFG_SCHEDULE_INDEXING_SKIP"
@@ -217,6 +226,7 @@ if [ $print_config -eq 1 ]; then
   echo "SCHEDULE_REFLINKING_MAX_DURATION=$CFG_SCHEDULE_REFLINKING_MAX_DURATION"
   echo "SCHEDULE_REFLINKING_SKIP=$CFG_SCHEDULE_REFLINKING_SKIP"
   echo "DASHBOARD_FILE=$CFG_DASHBOARD_FILE"
+  echo "REPORTS_FILE=$CFG_REPORTS_FILE"
   echo "LOG_FILE=$CFG_LOG_FILE"
   echo "LOG_FILE_IMPORTANT=$CFG_LOG_FILE_IMPORTANT"
   echo "LOG_FILE_ERRORS=$CFG_LOG_FILE_ERRORS"
@@ -419,15 +429,6 @@ log_important() {
 log_actions() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&6
 }
-# usage: write_statistic bclonesaved 12345
-write_statistic() {
-  STATISTIC_FILE="$CFG_TMP_DIR/statistics/$1"
-  STATISTIC_VALUE="$2"
-  STATISTICS_LOCK="$CFG_LOCK_DIR/statistics_write.lock"
-  flock "$STATISTICS_LOCK" bash -c '
-    echo "'"$STATISTIC_VALUE"'" > "'"$STATISTIC_FILE"'"
-  '
-}
 format_time_hm() {
   local total_seconds=$1
   local hours=$(( total_seconds / 3600 ))
@@ -438,6 +439,91 @@ format_time_hm() {
   else
     printf "%dm" "$minutes"
   fi
+}
+format_time_hms() {
+  local total_seconds=$1
+  local hours=$(( total_seconds / 3600 ))
+  local minutes=$(( (total_seconds % 3600) / 60 ))
+  local seconds=$(( total_seconds % 60 ))
+
+  if (( hours > 0 )); then
+    printf "%dh %02dm %02ds" "$hours" "$minutes" "$seconds"
+  elif (( minutes > 0 )); then
+    printf "%dm %02ds" "$minutes" "$seconds"
+  else
+    printf "%ds" "$seconds"
+  fi
+}
+# usage: write_statistic bclonesaved 12345
+write_statistic() {
+  STATISTIC_FILE="$CFG_TMP_DIR/statistics/$1"
+  STATISTIC_VALUE="$2"
+  STATISTICS_LOCK="$CFG_LOCK_DIR/statistics_write.lock"
+  flock "$STATISTICS_LOCK" bash -c '
+    echo "'"$STATISTIC_VALUE"'" > "'"$STATISTIC_FILE"'"
+  '
+}
+write_execution_report() {
+  TOTAL_START="$1"
+  TOTAL_END="$2"
+  CLEAN_START="$3"
+  CLEAN_END="$4"
+  INDEXING_START="$5"
+  INDEXING_END="$6"
+  FIND_DUPLICATES_START="$7"
+  FIND_DUPLICATES_END="$8"
+  REFLINK_START="$9"
+  REFLINK_END="${10}"
+  STATISTICS_START="${11}"
+  STATISTICS_END="${12}"
+
+  # Report file
+  if [ "$CFG_REPORTS_FILE" == "" ]; then
+    log_important "Report not generated: no path specified for report file."
+    return
+  fi
+  REPORT_FILE="$CFG_REPORTS_FILE"
+
+  # Compute durations
+  duration() {
+    local start="$1"
+    local end="$2"
+    echo $((end - start))
+  }
+  local CLEAN_DURATION=$(duration "$CLEAN_START" "$CLEAN_END")
+  local INDEXING_DURATION=$(duration "$INDEXING_START" "$INDEXING_END")
+  local FIND_DUPLICATES_DURATION=$(duration "$FIND_DUPLICATES_START" "$FIND_DUPLICATES_END")
+  local REFLINK_DURATION=$(duration "$REFLINK_START" "$REFLINK_END")
+  local TOTAL_DURATION=$(duration "$TOTAL_START" "$TOTAL_END")
+
+  # Write the report
+  {
+    echo "=================== EXECUTION REPORT ======================================================================================"
+    printf "Execution Start : %s\n" "$(date -r "$TOTAL_START" '+%Y-%m-%d %H:%M:%S')"
+    printf "Execution End   : %s\n" "$(date -r "$TOTAL_END" '+%Y-%m-%d %H:%M:%S')"
+    printf "Total Duration  : %s\n" "$(format_time_hms $TOTAL_DURATION)"
+    echo
+    echo "Statistics before:"
+    echo "$STATISTICS_START"
+    echo
+    echo "Statistics after:"
+    echo "$STATISTICS_END"
+    echo
+    echo "Tasks:"
+    echo "---------------------------------------------------------------------------------------------------------------------------"
+    printf "%-20s | %-12s | %-10s | %-13s | %-12s | %-15s | %-26s\n" \
+      "Task" "Skipped" "Max count" "Max duration" "Actual count" "Actual duration" "Result"
+    echo "---------------------------------------------------------------------------------------------------------------------------"
+    printf "%-20s | %-12s | %-10s | %-13s | %-12s | %-15s | %-26s\n" \
+      "Clean" "$CFG_SCHEDULE_CLEAN_SKIP" "$CFG_SCHEDULE_CLEAN_MAX_COUNT" "$(format_time_hms $CFG_SCHEDULE_CLEAN_MAX_DURATION)" "$(cat "$CFG_TMP_DIR/results/clean_count")" "$(format_time_hms $CLEAN_DURATION)" "$(cat "$CFG_TMP_DIR/results/clean_cleaned") rows cleaned"
+    printf "%-20s | %-12s | %-10s | %-13s | %-12s | %-15s | %-26s\n" \
+      "Indexing" "$CFG_SCHEDULE_INDEXING_SKIP" "$CFG_SCHEDULE_INDEXING_MAX_COUNT" "$(format_time_hms $CFG_SCHEDULE_INDEXING_MAX_DURATION)" "$(cat "$CFG_TMP_DIR/results/index_count")" "$(format_time_hms $INDEXING_DURATION)" "$(cat "$CFG_TMP_DIR/results/index_real") files indexed"
+    printf "%-20s | %-12s | %-10s | %-13s | %-12s | %-15s | %-26s\n" \
+      "Find Duplicates" "$CFG_SCHEDULE_FIND_DUPLICATES_SKIP" "$CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT" "$(format_time_hms $CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION)" "$(cat "$CFG_TMP_DIR/results/find_dupes_count")" "$(format_time_hms $FIND_DUPLICATES_DURATION)" "$(cat "$CFG_TMP_DIR/results/find_dupes_found") dupes found"
+    printf "%-20s | %-12s | %-10s | %-13s | %-12s | %-15s | %-26s\n" \
+      "Reflink Duplicates" "$CFG_SCHEDULE_REFLINKING_SKIP" "$CFG_SCHEDULE_REFLINKING_MAX_COUNT" "$(format_time_hms $CFG_SCHEDULE_REFLINKING_MAX_DURATION)" "$(cat "$CFG_TMP_DIR/results/reflink_count")" "$(format_time_hms $REFLINK_DURATION)" "$(cat "$CFG_TMP_DIR/results/reflink_count") reflinks created"
+    echo "==========================================================================================================================="
+  } >> "$REPORT_FILE"
 }
 reopen_logs_init=1
 reopen_logs() {
@@ -639,60 +725,61 @@ format_duration() {
     fi
 }
 mkdir -p "$CFG_TMP_DIR/statistics"
+print_statistics() {
+  cells=()
+  # iterate in fixed order
+  for key in saved_bytes created_reflinks conflicts_found bcloneused bclonesaved bcloneratio; do
+    statistic_file="$CFG_TMP_DIR/statistics/$key"
+    [ -f "$statistic_file" ] || continue
+
+    case "$key" in
+      saved_bytes)      name="Reflinked data"   ; format="bytes";;
+      created_reflinks) name="Reflinks created" ; format="count";;
+      conflicts_found)  name="Conflicts found"  ; format="count";;
+      bcloneused)       name="Pool bclone used" ; format="bytes";;
+      bclonesaved)      name="Pool bclone saved"; format="bytes";;
+      bcloneratio)      name="Pool bclone ratio"; format="count";;
+    esac
+
+    raw_value="$(cat "$statistic_file")"
+    case "$format" in
+      bytes) hr_value="$(hr_size "$raw_value")" ;;
+      count) hr_value="$raw_value" ;;
+    esac
+
+    cells+=("$name: $hr_value")
+  done
+  COLUMNS=3
+  # compute max width for each of N columns
+  declare -a col_widths
+  for ((i=0; i<${#cells[@]}; i++)); do
+    col=$(( i % $COLUMNS ))
+    len=${#cells[i]}
+    if [ -z ${col_widths[$col]} ] || [ ${col_widths[$col]} -lt $len ]; then
+      col_widths[$col]=$len
+    fi
+  done
+  # print rows with 4 columns max
+  for ((i=0; i<${#cells[@]}; i++)); do
+    col=$(( i % $COLUMNS ))
+    width=${col_widths[$col]}
+    printf "%-${width}s" "${cells[i]}"
+    if [ $col -lt $((COLUMNS-1)) ] && [ $i -lt $((${#cells[@]} - 1)) ]; then
+      printf " | "
+    fi
+    if [ $col -eq $((COLUMNS-1)) ] || [ $i -eq $((${#cells[@]} - 1)) ]; then
+      printf "\n"
+    fi
+  done
+}
 print_dashboard() {
     tput clear >&3
     if [ "$CFG_DASHBOARD_FILE" != "" ]; then echo -n "" > "$CFG_DASHBOARD_FILE"; fi
     {
       echo "Statistics:"
       shopt -s nullglob
-      cells=()
-      # iterate in fixed order
-      for key in saved_bytes created_reflinks conflicts_found bcloneused bclonesaved bcloneratio; do
-        statistic_file="$CFG_TMP_DIR/statistics/$key"
-        [ -f "$statistic_file" ] || continue
-
-        case "$key" in
-            saved_bytes)      name="Reflinked data"   ; format="bytes";;
-            created_reflinks) name="Reflinks created" ; format="count";;
-            conflicts_found)  name="Conflicts found"  ; format="count";;
-            bcloneused)       name="Pool bclone used" ; format="bytes";;
-            bclonesaved)      name="Pool bclone saved"; format="bytes";;
-            bcloneratio)      name="Pool bclone ratio"; format="count";;
-        esac
-
-        raw_value="$(cat "$statistic_file")"
-        case "$format" in
-            bytes) hr_value="$(hr_size "$raw_value")" ;;
-            count) hr_value="$raw_value" ;;
-        esac
-
-        cells+=("$name: $hr_value")
-      done
-      COLUMNS=3
-      # compute max width for each of N columns
-      declare -a col_widths
-      for ((i=0; i<${#cells[@]}; i++)); do
-        col=$(( i % $COLUMNS ))
-        len=${#cells[i]}
-        if [ -z ${col_widths[$col]} ] || [ ${col_widths[$col]} -lt $len ]; then
-          col_widths[$col]=$len
-        fi
-      done
-      # print rows with 4 columns max
-      for ((i=0; i<${#cells[@]}; i++)); do
-        col=$(( i % $COLUMNS ))
-        width=${col_widths[$col]}
-        printf "%-${width}s" "${cells[i]}"
-        if [ $col -lt $((COLUMNS-1)) ] && [ $i -lt $((${#cells[@]} - 1)) ]; then
-          printf " | "
-        fi
-        if [ $col -eq $((COLUMNS-1)) ] || [ $i -eq $((${#cells[@]} - 1)) ]; then
-          printf "\n"
-        fi
-      done
+      print_statistics
       printf "\n"
-
-
 
 
       echo "Tasks in progress:"
@@ -738,6 +825,7 @@ print_dashboard() {
               watchers) watchers="$value" ;;
               threads) threads="$value" ;;
               debouncing) debouncing="$value" ;;
+              cleaned) cleaned="$value" ;;
             esac
           done < "$state_file"
 
@@ -794,13 +882,21 @@ print_dashboard() {
                     eta_seconds=0
                 fi
 
-                printf "%s %s| threads: %s %s| progress: %d%% (%s/%s) ETA: "  "$stepname" "$spaces" "$threads" "$spaces_thr" "$percent" "$current" "$total"
+                if [ -z "$cleaned" ]; then
+                  printf "%s %s| threads: %s %s| progress: %d%% (%s/%s) ETA: "  "$stepname" "$spaces" "$threads" "$spaces_thr" "$percent" "$current" "$total"
+                else
+                  printf "%s %s| threads: %s %s| progress: %d%% (%s/%s) cleaned: %s ETA: "  "$stepname" "$spaces" "$threads" "$spaces_thr" "$percent" "$current" "$total" "$cleaned"
+                fi
                 format_duration $eta_seconds
                 printf " (elapsed: "
                 format_duration $elapsed
                 printf ")\n"
               else
-                printf "%s %s| threads: %s %s| progress: ? (%s/?) ETA: ? (elapsed: " "$stepname" "$spaces" "$threads" "$spaces_thr" "$current"
+                if [ -z "$cleaned" ]; then
+                  printf "%s %s| threads: %s %s| progress: ? (%s/?) ETA: ? (elapsed: " "$stepname" "$spaces" "$threads" "$spaces_thr" "$current"
+                else
+                  printf "%s %s| threads: %s %s| progress: ? (%s/?) cleaned: %s ETA: ? (elapsed: " "$stepname" "$spaces" "$threads" "$spaces_thr" "$current" "$cleaned"
+                fi
                 format_duration $elapsed
                 printf ")\n"
               fi
@@ -871,10 +967,10 @@ schedule_task() {
     # generic exports
     export -f update_task_state decrement_counter increment_counter log log_important log_actions sqlite_write hash_file get_metadata set_metadata increment_metadata add_pgid remove_pgid pgid_is_active kill_tree
     PARENT_PID=$$
-    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS CFG_FIND_DUPLICATES_BATCH_SIZE
+    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS CFG_FIND_DUPLICATES_BATCH_SIZE CFG_CLEAN_BATCH_SIZE
 
     # export tasks
-    export -f initial_indexing find_duplicates watcher
+    export -f clean_database initial_indexing find_duplicates watcher
 
     # Start the task in background
     log "Starting task: $stepname, max duration: $max_duration, max count: $max_count, cores: $max_cores"
@@ -917,6 +1013,238 @@ schedule_task() {
     pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
     pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
     add_pgid "$pgid"
+}
+
+### === CLEAN === ###
+clean_database() {
+  local max_duration="$1"
+  local count_limit="$2"
+  local state_file="$3"
+  local max_cores="$4"
+  local skip="$5"
+  shift 5
+  local task_start_time=$(date +%s)
+  local processed=0
+
+  if [ $skip -eq 1 ]; then
+    log_important "[CLEAN] Processing skipped."
+    return
+  fi
+
+
+  # Get cached total from DB, default to 0 if none
+  local total
+  if [ $count_limit -ne 0 ]; then
+    total=$count_limit
+  else
+    total=${total:-0}
+  fi
+
+  # update initial task state
+  update_task_state clean \
+        $state_file \
+        stepname=clean \
+        start_epoch="$task_start_time" \
+        current="$processed" \
+        total="$total" \
+        threads="$max_cores" \
+        cleaned="0"
+
+  # Start fresh counting in background, update DB once done
+  mkdir -p "$CFG_TMP_DIR/totals"
+  PROGRESS_TOTAL_FILE="$CFG_TMP_DIR/totals/clean"
+  rm -f "$PROGRESS_TOTAL_FILE"
+  export PROGRESS_TOTAL_FILE
+
+  new_total=$(sqlite3 -cmd ".timeout 5000" "$CFG_DB" "SELECT COUNT(*) FROM files;")
+  if [ $count_limit -ne 0 ]; then
+    if [ $new_total -gt $count_limit ]; then
+      total="$count_limit"
+    fi
+    if [ $new_total -lt $count_limit ] || [ $new_total -eq $count_limit ]; then
+      total="$new_total"
+    fi
+  else
+    total="$new_total"
+  fi
+  echo "$total" > "$PROGRESS_TOTAL_FILE"
+  log_important "[CLEAN] Total computed. Real: ${new_total} files, Effective: ${total} files."
+
+  # where to store counter
+  PROGRESS_COUNT_FILE="$CFG_TMP_DIR/counters/clean"
+  mkdir -p "$CFG_TMP_DIR/counters"
+  echo "0" > $PROGRESS_COUNT_FILE
+  echo "0" > "${PROGRESS_COUNT_FILE}-deleted"
+
+  (
+    CLEANUP_FILE_LIST="$CFG_TMP_DIR/cleanup/cleaning_file_list"
+    CLEANUP_FILE_LOCK="$CFG_TMP_DIR/cleanup/cleaning_file_list.lock"
+    mkdir -p "$CFG_TMP_DIR/cleanup"
+    rm -f "$CLEANUP_FILE_LIST"
+    THRESHOLD="$CFG_CLEAN_BATCH_SIZE"
+
+    # Speed up SQLite during cleanup
+    sqlite3 -cmd ".timeout 5000" "$CFG_DB" "PRAGMA journal_mode=WAL; PRAGMA synchronous=OFF;"
+
+    execute_cleanup() {
+      local batch_file
+      batch_file=$(mktemp "$CFG_TMP_DIR/cleanup/cleanup_batch.$$")
+
+      if [ ! -f "$CLEANUP_FILE_LIST" ]; then
+        rm -f "$batch_file"
+        return
+      fi
+
+      # Read up to THRESHOLD lines from file
+      (
+        flock -x 200
+        if [ $THRESHOLD -eq 0 ]; then
+          cp -f "$CLEANUP_FILE_LIST" "$batch_file"
+        else
+          if [ $(awk 'END {print NR}' "$CLEANUP_FILE_LIST") -ge $THRESHOLD ]; then
+            head -n "$THRESHOLD" "$CLEANUP_FILE_LIST" > "$batch_file"
+            sed -i '' "1,${THRESHOLD}d" "$CLEANUP_FILE_LIST"
+          else
+            rm -f "$batch_file"
+            return
+          fi
+        fi
+      ) 200>"$CLEANUP_FILE_LOCK"
+
+      # Skip empty batches
+      [ -s "$batch_file" ] || { rm -f "$batch_file"; return; }
+
+      # create temp table
+      sqlite3 -cmd ".timeout 5000" "$CFG_DB" "CREATE TABLE batch_delete(path TEXT);"
+      while IFS= read -r path; do
+        safe_path=${path//\'/\'\'}
+        sqlite3 -cmd ".timeout 5000" "$CFG_DB" "INSERT INTO batch_delete(path) VALUES ('$safe_path');"
+      done < "$batch_file"
+
+      # execute batch delete
+      sqlite3 -cmd ".timeout 5000" "$CFG_DB" "
+        DELETE FROM files WHERE path IN (SELECT path FROM batch_delete);
+        DELETE FROM duplicates WHERE original IN (SELECT path FROM batch_delete) OR duplicate IN (SELECT path FROM batch_delete);
+        DROP TABLE batch_delete;
+      " || echo "SQLite deletion failed for batch."
+
+      rm -f "$batch_file"
+    }
+
+    # --- PARALLEL FILE SCANNING ---
+    declare -f increment_counter > "$CFG_TMP_DIR/cleanup/increment_counter.sh"
+    chmod +x "$CFG_TMP_DIR/cleanup/increment_counter.sh"
+    xargs -0 -n 1 -P "$max_cores" bash -c '
+      exec </dev/null
+      CFG_LOCK_DIR="'"$CFG_LOCK_DIR"'"
+      PROGRESS_COUNT_FILE="'"$PROGRESS_COUNT_FILE"'"
+      source "'"$CFG_TMP_DIR"'/cleanup/increment_counter.sh"
+      f="$1"
+      if [ ! -e "$f" ]; then
+        (
+          flock -x 200
+          echo "$f" >> "'"$CLEANUP_FILE_LIST"'"
+        ) 200>"'"$CLEANUP_FILE_LOCK"'"
+        increment_counter "-deleted"
+      fi
+      increment_counter
+    ' _ < <(sqlite3 -cmd ".timeout 5000" -noheader -batch "$CFG_DB" "SELECT path FROM files LIMIT $total;" | tr '\n' '\0') &
+    cleanup_search_pid=$!
+
+    # cleanup worker
+    cleanup_worker() {
+      while true; do
+        if ! kill -0 "$cleanup_search_pid" 2>/dev/null || [ $THRESHOLD -eq 0 ]; then
+          execute_cleanup
+          break
+        else
+          execute_cleanup || break
+        fi
+        sleep 5
+      done
+    }
+    cleanup_worker &
+    cleanup_worker_pid=$!
+
+    terminate() {
+      kill $cleanup_search_pid
+      THRESHOLD=0
+      wait $cleanup_worker_pid
+      rm -rf "$CFG_TMP_DIR/cleanup" 2>/dev/null || true
+      exit 0
+    }
+    trap terminate INT TERM EXIT
+
+    wait $cleanup_search_pid
+    wait $cleanup_worker_pid
+  ) &
+  cleaning_pid=$!
+
+
+  # Progress reporting loop
+  local last_count=$processed
+  while kill -0 $cleaning_pid 2>/dev/null; do
+    if [ -f $PROGRESS_COUNT_FILE ]; then
+      last_count=$(cat "$PROGRESS_COUNT_FILE")
+      if [[ ! "$last_count" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
+    fi
+    if [ -f "$PROGRESS_COUNT_FILE-deleted" ]; then
+      last_count_deleted=$(cat "$PROGRESS_COUNT_FILE-deleted")
+    fi
+
+    if [ -f "$PROGRESS_TOTAL_FILE" ]; then
+      total=$(cat "$PROGRESS_TOTAL_FILE")
+      rm -f "$PROGRESS_TOTAL_FILE"
+    fi
+
+    if [ $last_count -gt $processed ]; then
+      processed=$last_count
+      update_task_state clean \
+        $state_file \
+        stepname=clean \
+        start_epoch="$task_start_time" \
+        current="$processed" \
+        total="$total" \
+        threads="$max_cores" \
+        cleaned="$last_count_deleted"
+    fi
+
+    if [ $total -ne 0 ] && [ $last_count -ge $total ]; then
+      log_important "[CLEAN] Max count reached — killing task."
+      if kill -0 "$cleaning_pid" 2>/dev/null; then
+        kill $cleaning_pid
+      fi
+      log_important "[CLEAN] Processing finished."
+      break
+    fi
+
+    if [ "$max_duration" -gt 0 ] && [ $(( $(date +%s) - task_start_time )) -ge "$max_duration" ]; then
+      log_important "[CLEAN] ⏱ Max duration reached — killing task."
+      if kill -0 "$cleaning_pid" 2>/dev/null; then
+        kill $cleaning_pid
+      fi
+      log_important "[CLEAN] Processing finished."
+      break
+    fi
+
+    sleep 1
+  done
+
+  # fully wait for all background processes to exit.
+  wait $cleaning_pid
+
+  # reset sqlite pragma
+  sqlite3 -cmd ".timeout 5000" "$CFG_DB" "PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;"
+
+  # Cleanup in case temp file still exists
+  mkdir -p "$CFG_TMP_DIR/results"
+  rm -f "$PROGRESS_TOTAL_FILE"
+  mv -f "$PROGRESS_COUNT_FILE" "$CFG_TMP_DIR/results/clean_count"
+  mv -f "${PROGRESS_COUNT_FILE}-deleted" "$CFG_TMP_DIR/results/clean_cleaned"
+  rm -f "$CFG_LOCK_DIR/$(basename $PROGRESS_COUNT_FILE).lock"
 }
 
 
@@ -977,12 +1305,12 @@ index_file() {
     file_size=$(stat -f%z "$file")
     sqlite_write "INSERT OR REPLACE INTO files (path, hash, last_checked, file_size) VALUES ('$safe_file', '$hash', $mtime, $file_size);"
     log "Indexed: $file"
+    increment_counter "-indexed"
   else
     log "Skipped (unchanged): $file"
   fi
 
   increment_counter
-  echo "$hash"
 }
 initial_indexing() {
   local max_duration="$1"
@@ -1059,6 +1387,7 @@ initial_indexing() {
   PROGRESS_COUNT_FILE="$CFG_TMP_DIR/counters/indexing"
   mkdir -p "$CFG_TMP_DIR/counters"
   echo "0" > $PROGRESS_COUNT_FILE
+  echo "0" > "${PROGRESS_COUNT_FILE}-indexed"
 
   # index files in parallel
   export PROGRESS_COUNT_FILE count_limit max_cores
@@ -1117,8 +1446,10 @@ initial_indexing() {
   wait $parallel_pid
 
   # Cleanup in case temp file still exists
+  mkdir -p "$CFG_TMP_DIR/results"
   rm -f "$PROGRESS_TOTAL_FILE"
-  rm -f "$PROGRESS_COUNT_FILE"
+  mv -f "$PROGRESS_COUNT_FILE" "$CFG_TMP_DIR/results/index_count"
+  mv -f "$PROGRESS_COUNT_FILE-indexed" "$CFG_TMP_DIR/results/index_real"
   rm -f "$CFG_LOCK_DIR/$(basename $PROGRESS_COUNT_FILE).lock"
 }
 
@@ -1130,12 +1461,15 @@ find_duplicates_single() {
   # Insert duplicates for this batch, skipping already existing ones
   sqlite3 -cmd ".timeout 50000" "$CFG_DB" <<EOF
 INSERT INTO duplicates (original, duplicate, reflinked)
-SELECT f1.path AS original, f2.path AS duplicate, 0
+SELECT
+    CASE WHEN f1.path < f2.path THEN f1.path ELSE f2.path END AS original,
+    CASE WHEN f1.path < f2.path THEN f2.path ELSE f1.path END AS duplicate,
+    0
 FROM files f1
 JOIN files f2
     ON f1.hash = f2.hash
-    AND f1.path < f2.path       -- keep original < duplicate
 WHERE f1.path = '$file'
+  AND f1.path != f2.path
   AND NOT EXISTS (
       SELECT 1
       FROM duplicates d
@@ -1216,6 +1550,7 @@ find_duplicates() {
   (
     offset=0
     batch_number=1
+    inserted_count=0
     while true; do
 
 
@@ -1238,7 +1573,7 @@ EOF
         fi
 
         # Insert duplicates for this batch, skipping already existing ones
-        sqlite3 -cmd ".timeout 50000" "$CFG_DB" <<EOF
+        inserted_count_b=(sqlite3 -cmd ".timeout 50000" "$CFG_DB" "
         BEGIN TRANSACTION;
         INSERT INTO duplicates (original, duplicate, reflinked)
         SELECT a.path, b.path, 0
@@ -1253,15 +1588,18 @@ EOF
             WHERE d.original = a.path
               AND d.duplicate = b.path
           );
+        SELECT changes();
         COMMIT;
-EOF
+")
 
         # update state
         increment_counter
         batch_number=$((batch_number + 1))
         offset=$((offset + BATCH_SIZE))
+        inserted_count=$((inserted_count + inserted_count_b))
     done
     log_important "[FIND-DUPLICATES] Processing finished."
+    echo "$inserted_count" > "$CFG_TMP_DIR/results/find_dupes_found"
   ) &
   find_dupes_pid=$!
 
@@ -1299,8 +1637,9 @@ EOF
   wait $find_dupes_pid
 
   # Cleanup in case temp file still exists
+  mkdir -p "$CFG_TMP_DIR/results"
   rm -f "$PROGRESS_TOTAL_FILE"
-  rm -f "$PROGRESS_COUNT_FILE"
+  mv -f "$PROGRESS_COUNT_FILE" "$CFG_TMP_DIR/results/find_dupes_count"
   rm -f "$CFG_LOCK_DIR/$(basename $PROGRESS_COUNT_FILE).lock"
 }
 
@@ -1723,6 +2062,21 @@ WHERE rowid IN (
 worker_loop() {
   total=0
   while [ ! -f "$CFG_TMP_DIR/reflinking_stop_signal" ]; do
+
+    # prevent starting new reflinking job when count limit is reached
+    if [ $count_limit -gt 0 ]; then
+      claimed=$(cat "$PROGRESS_COUNT_FILE-claimed")
+      if [[ ! "$claimed" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
+      if [[ $claimed -ge $count_limit ]]; then
+        break
+      fi
+      increment_counter "-claimed"
+    fi
+
+    # claim a new job
     row=$(claim_row)
     [ -z "$row" ] && break  # no more work
 
@@ -1834,7 +2188,8 @@ reflink_duplicates() {
   # where to store counter
   PROGRESS_COUNT_FILE="$CFG_TMP_DIR/counters/reflink_duplicates"
   mkdir -p "$CFG_TMP_DIR/counters"
-  echo "0" > $PROGRESS_COUNT_FILE
+  echo "0" > "$PROGRESS_COUNT_FILE"
+  echo "0" > "$PROGRESS_COUNT_FILE-claimed"
 
   # --- Safe resume: reset stranded "in progress" rows ---
   sqlite3 "$CFG_DB" "UPDATE duplicates SET reflinked=0 WHERE reflinked=-1;"
@@ -1883,8 +2238,9 @@ reflink_duplicates() {
   set_metadata total_reflinkable_dupes "$((total - processed))"
 
   # Cleanup in case temp file still exists
+  mkdir -p "$CFG_TMP_DIR/results"
   rm -f "$PROGRESS_TOTAL_FILE"
-  rm -f "$PROGRESS_COUNT_FILE"
+  mv -f "$PROGRESS_COUNT_FILE" "$CFG_TMP_DIR/results/reflink_count"
   rm -f "$CFG_LOCK_DIR/$(basename $PROGRESS_COUNT_FILE).lock"
 }
 
@@ -1996,26 +2352,43 @@ WHERE rowid IN (
       sqlite3 -cmd ".timeout 50000" "$CFG_DB" <<EOF | while IFS='|' read -r original duplicate reflinked last_verified; do
 .mode list
 .separator '|'
-SELECT original, duplicate, reflinked, COALESCE(last_verified,0)
+SELECT original, duplicate, reflinked, COALESCE(last_verified, 0)
 FROM duplicates
-WHERE original = '$file_safe_sql'
-   OR duplicate = '$file_safe_sql'
-ORDER BY original, duplicate;
+WHERE (original = '$file_safe_sql' OR duplicate = '$file_safe_sql')
+  AND reflinked = 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM duplicates
+      WHERE (original = '$file_safe_sql' OR duplicate = '$file_safe_sql')
+        AND reflinked = 1
+  )
+ORDER BY original, duplicate
+LIMIT 1;
 EOF
         if [ "$last_verified" -eq 0 ]; then
           last_verified_human="never"
         else
           last_verified_human=$(date -r "$last_verified" "+%Y-%m-%d %H:%M:%S")
         fi
-        log "[WATCHER][PROCESSOR][$$]   Duplicate:"
-        log "[WATCHER][PROCESSOR][$$]     Original: $original"
-        log "[WATCHER][PROCESSOR][$$]     Duplicate: $duplicate"
-        log "[WATCHER][PROCESSOR][$$]     Reflinked: $reflinked"
-        log "[WATCHER][PROCESSOR][$$]     Last Verified: $last_verified_human"
+
+        log "[WATCHER][PROCESSOR][$$]     Creating reflink: $original -> $duplicate"
+        echo "1" > "$WATCHER_EVENTS_DIR/$(echo -n "$original" | md5).reflinked"
+        echo "1" > "$WATCHER_EVENTS_DIR/$(echo -n "$duplicate" | md5).reflinked"
+        original_dir_safe=$(echo -n $(dirname "$original") | md5)
+        duplicate_dir_safe=$(echo -n $(dirname "$original") | md5)
+        echo "1" > "$WATCHER_EVENTS_DIR/$original_dir_safe.reflinked"
+        echo "1" > "$WATCHER_EVENTS_DIR/$duplicate_dir_safe.reflinked"
+        process_duplicate "$original" "$duplicate"
+        date +%s > "$DIR_LAST_SCAN/$original_dir_safe"
+        date +%s > "$DIR_LAST_SCAN/$duplicate_dir_safe"
       done
     else
       log "[WATCHER][PROCESSOR][$$]   Not a file nor directory."
     fi
+
+    # clear temporary directory
+    rm -f "$WATCHER_EVENTS_DIR/$file_safe.events"
+    rm -f "$WATCHER_EVENTS_DIR/$file_safe.lock"
 
     # Release slot
     echo "_" > "$CFG_TMP_DIR/slots/${slot}_progress"
@@ -2031,6 +2404,17 @@ debounce_event() {
     # Encode path for safe filename (e.g., base64 or URL encode)
     local file_safe
     file_safe=$(echo -n "$file_path" | md5)  # simple md5 hash of path
+
+    # Skip debouncing files that have been reflinked by the watcher.
+    if [ -f "$WATCHER_EVENTS_DIR/$file_safe.reflinked" ]; then
+      (
+        sleep 5
+        if [ -f "$WATCHER_EVENTS_DIR/$file_safe.reflinked" ]; then
+          rm -f "$WATCHER_EVENTS_DIR/$file_safe.reflinked"
+        fi
+      ) &
+      return
+    fi
 
     local event_file="$WATCHER_EVENTS_DIR/$file_safe.events"
     local lock_file="$WATCHER_EVENTS_DIR/$file_safe.lock"
@@ -2161,7 +2545,7 @@ watcher() {
 
   # index files in parallel
   export PROGRESS_COUNT_FILE max_cores WATCHER_EVENTS_DIR WATCHER_QUEUE_FILE DIR_LAST_SCAN watcher_start_time
-  export -f hash_file index_file cleanup_stale_tmp claim_slot release_slot debounce_event
+  export -f hash_file index_file cleanup_stale_tmp claim_slot release_slot debounce_event find_duplicates_single process_duplicate
   declare -f > "$CFG_TMP_DIR/funcfile_watcher"
   export -p > "$CFG_TMP_DIR/envfile_watcher"
 
@@ -2182,6 +2566,12 @@ watcher() {
         event="${line##* }"                    # everything after last space
         path="${line#* }"                      # remove first field
         path="${path% $event}"                 # remove last field
+
+        case "$path" in
+          *.dedupe.rfl.[0-9]*|*.dedupe.tmp.[0-9]*|*.dedupe.conflict.[0-9]*.[0-9]*|.dedupe.rfl.[0-9]*.tmp_reflink)
+              exit 0
+              ;;
+        esac
 
         # Log each event line (timestamp, event, path)
         log "[WATCHER][EVENT] Event: $event, Timestamp: $timestamp, Watcher: '"$path"', Path: $path"
@@ -2317,40 +2707,74 @@ monitor_zpool() {
 ### === MAIN === ###
 schedule_deduplication() {
   echo "2" > "$CFG_TMP_DIR/schedule_deduplication"
+  TOTAL_START=$(date +%s)
+  STATISTICS_START=$(print_statistics)
 
-  skip=""; if [ $CFG_SCHEDULE_INDEXING_SKIP -eq 1 ]; then skip="--skip"; fi
-  schedule_task indexing initial_indexing --max-count $CFG_SCHEDULE_INDEXING_MAX_COUNT --max-duration $CFG_SCHEDULE_INDEXING_MAX_DURATION --max-cores $TASK_THREADS $skip
-  init_indexing_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
-  init_indexing_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
-  log "Task indexing scheduled with PID $init_indexing_pid PGID $init_indexing_pgid"
+  CLEAN_START=$(date +%s)
+  skip=""; if [ $CFG_SCHEDULE_CLEAN_SKIP -eq 1 ]; then skip="--skip"; fi
+  schedule_task clean clean_database --max-count $CFG_SCHEDULE_CLEAN_MAX_COUNT --max-duration $CFG_SCHEDULE_CLEAN_MAX_DURATION --max-cores $TASK_THREADS $skip
+  init_clean_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
+  init_clean_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
+  log "Task clean scheduled with PID $init_clean_pid PGID $init_clean_pgid"
 
-  # schedule find-duplicates
   export -f wait_for_pgid
-  export init_indexing_pgid CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION CFG_SCHEDULE_FIND_DUPLICATES_SKIP CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP
+  export init_clean_pgid CFG_SCHEDULE_INDEXING_SKIP CFG_SCHEDULE_INDEXING_MAX_COUNT CFG_SCHEDULE_INDEXING_MAX_DURATION CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION CFG_SCHEDULE_FIND_DUPLICATES_SKIP CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP TOTAL_START CLEAN_START
   (
-    wait_for_pgid $init_indexing_pgid
-    skip=""; if [ $CFG_SCHEDULE_FIND_DUPLICATES_SKIP -eq 1 ]; then skip="--skip"; fi
-    schedule_task find-duplicates find_duplicates --max-count $CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT --max-duration $CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION --max-cores $TASK_THREADS $skip
-    find_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
-    find_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
-    log "Task find-duplicates scheduled with PID $find_duplicates_pid PGID $find_duplicates_pgid"
+    wait_for_pgid $init_clean_pgid
+    CLEAN_END=$(date +%s)
+    INDEXING_START=$(date +%s)
+    skip=""; if [ $CFG_SCHEDULE_INDEXING_SKIP -eq 1 ]; then skip="--skip"; fi
+    schedule_task indexing initial_indexing --max-count $CFG_SCHEDULE_INDEXING_MAX_COUNT --max-duration $CFG_SCHEDULE_INDEXING_MAX_DURATION --max-cores $TASK_THREADS $skip
+    init_indexing_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
+    init_indexing_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
+    log "Task indexing scheduled with PID $init_indexing_pid PGID $init_indexing_pgid"
 
-    export find_duplicates_pid CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP
+    export -f wait_for_pgid
+    export init_indexing_pgid CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION CFG_SCHEDULE_FIND_DUPLICATES_SKIP CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP TOTAL_START CLEAN_START CLEAN_END INDEXING_START
     (
-      wait_for_pgid $find_duplicates_pgid
-      skip=""; if [ $CFG_SCHEDULE_REFLINKING_SKIP -eq 1 ]; then skip="--skip"; fi
-      schedule_task reflink-duplicates reflink_duplicates --max-count $CFG_SCHEDULE_REFLINKING_MAX_COUNT --max-duration $CFG_SCHEDULE_REFLINKING_MAX_DURATION --max-cores $TASK_THREADS $skip
-      reflink_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
-      reflink_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
-      log "Task reflink-duplicates scheduled with PID $reflink_duplicates_pid PGID $reflink_duplicates_pgid"
+      wait_for_pgid $init_indexing_pgid
+      INDEXING_END=$(date +%s)
+      FIND_DUPLICATES_START=$(date +%s)
+      skip=""; if [ $CFG_SCHEDULE_FIND_DUPLICATES_SKIP -eq 1 ]; then skip="--skip"; fi
+      schedule_task find-duplicates find_duplicates --max-count $CFG_SCHEDULE_FIND_DUPLICATES_MAX_COUNT --max-duration $CFG_SCHEDULE_FIND_DUPLICATES_MAX_DURATION --max-cores $TASK_THREADS $skip
+      find_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
+      find_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
+      log "Task find-duplicates scheduled with PID $find_duplicates_pid PGID $find_duplicates_pgid"
 
-      wait_for_pgid $reflink_duplicates_pgid
-      echo "0" > "$CFG_TMP_DIR/schedule_deduplication"
+      export find_duplicates_pid CFG_SCHEDULE_REFLINKING_MAX_COUNT CFG_SCHEDULE_REFLINKING_MAX_DURATION CFG_SCHEDULE_REFLINKING_SKIP TOTAL_START CLEAN_START CLEAN_END INDEXING_START INDEXING_END FIND_DUPLICATES_START
+      (
+        wait_for_pgid $find_duplicates_pgid
+        FIND_DUPLICATES_END=$(date +%s)
+        REFLINK_DUPLICATES_START=$(date +%s)
+        skip=""; if [ $CFG_SCHEDULE_REFLINKING_SKIP -eq 1 ]; then skip="--skip"; fi
+        schedule_task reflink-duplicates reflink_duplicates --max-count $CFG_SCHEDULE_REFLINKING_MAX_COUNT --max-duration $CFG_SCHEDULE_REFLINKING_MAX_DURATION --max-cores $TASK_THREADS $skip
+        reflink_duplicates_pid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pid")
+        reflink_duplicates_pgid=$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid")
+        log "Task reflink-duplicates scheduled with PID $reflink_duplicates_pid PGID $reflink_duplicates_pgid"
 
-      if [ $oneshot -eq 1 ]; then
-        cleanup
-        exit 0
-      fi
+        # wait for end
+        wait_for_pgid $reflink_duplicates_pgid
+
+        # write report
+        REFLINK_DUPLICATES_END=$(date +%s)
+        TOTAL_END=$(date +%s)
+        STATISTICS_END=$(print_statistics)
+        write_execution_report "$TOTAL_START" "$TOTAL_END" \
+                       "$CLEAN_START" "$CLEAN_END" \
+                       "$INDEXING_START" "$INDEXING_END" \
+                       "$FIND_DUPLICATES_START" "$FIND_DUPLICATES_END" \
+                       "$REFLINK_DUPLICATES_START" "$REFLINK_DUPLICATES_END" \
+                       "$STATISTICS_START" "$STATISTICS_END"
+
+        # mark execution as ended
+        echo "0" > "$CFG_TMP_DIR/schedule_deduplication"
+
+        # cleanup if needed
+        if [ $oneshot -eq 1 ]; then
+          cleanup
+          exit 0
+        fi
+      ) &
     ) &
   ) &
 }
