@@ -6,6 +6,9 @@
 #
 # Licensed under the BSD 2-Clause License. See LICENSE file for details.
 
+# Disable noclobber
+set +o noclobber
+
 ### === COMMAND OPTIONS === ###
 parsed="$(docopts -V - -h - : "$@" <<EOF
 Usage:
@@ -22,7 +25,7 @@ Options:
       -h, --help            Show help options.
       -V, --version         Print program version.
 ----
-reflink_dedupe 0.9.2
+reflink_dedupe 0.9.3
 Copyright (C) 2025 Sophia Hadash
 Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
@@ -37,6 +40,10 @@ if [ $print_args == 1 ]; then
 fi
 if [ $daemon -eq 1 ] && [ $oneshot -eq 1 ]; then
   echo "ERROR: Options --daemon and --oneshot are mutually exclusive."
+  exit 1
+fi
+if [ $daemon -eq 1 ] && [ $interactive -eq 1 ]; then
+  echo "ERROR: Options --daemon and --interactive are mutually exclusive."
   exit 1
 fi
 if [ $schedule -eq 1 ] && [ $oneshot -eq 1 ]; then
@@ -416,17 +423,14 @@ else
   exec 3>&1
 fi
 
-# Disable noclobber
-set +o noclobber
-
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&4
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$CFG_LOG_FILE"
 }
 log_important() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&5
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$CFG_LOG_FILE_IMPORTANT"
 }
 log_actions() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&6
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$CFG_LOG_FILE_ACTIONS"
 }
 format_time_hm() {
   local total_seconds=$1
@@ -525,7 +529,10 @@ write_execution_report() {
   } >> "$REPORT_FILE"
 }
 reopen_logs_init=1
-reopen_logs() {
+reopen_logs_parent() {
+  # Flush before closing
+  sync
+
   # Close old log descriptors
   exec 4>&- 5>&- 6>&-
   exec 1>&- 2>&-
@@ -537,16 +544,22 @@ reopen_logs() {
   exec 6>>"$CFG_LOG_FILE_ACTIONS"
 
   if [ $reopen_logs_init -eq 0 ]; then
-    log_important "Logs rotated."
+    if [ -f "$CFG_PGID_FILE" ]; then
+      while read -r pgid; do
+        if [ -f "$CFG_TMP_DIR/pgid_to_main_pid/$pgid.pid" ]; then
+          kill -HUP -- "$(cat "$CFG_TMP_DIR/pgid_to_main_pid/$pgid.pid")" 2>/dev/null
+        fi
+      done < "$CFG_PGID_FILE"
+    fi
   fi
   reopen_logs_init=0
 }
 
 # Trap SIGHUP (newsyslog default)
-trap 'reopen_logs' HUP
+trap 'reopen_logs_parent' HUP
 
 # Open logs initially
-reopen_logs
+reopen_logs_parent
 
 
 ### === DATABASE === ###
@@ -777,14 +790,13 @@ print_dashboard() {
     fi
     if [ "$CFG_DASHBOARD_FILE" != "" ]; then echo -n "" > "$CFG_DASHBOARD_FILE"; fi
     {
-      echo "Statistics:"
       shopt -s nullglob
+
+      echo "Statistics:"
       print_statistics
       printf "\n"
 
-
       echo "Tasks in progress:"
-      shopt -s nullglob
       max_stepname=0
       max_threadsstr=0
       for state_file in "$CFG_TMP_DIR/tasks/"*.state; do
@@ -968,7 +980,7 @@ schedule_task() {
     # generic exports
     export -f update_task_state decrement_counter increment_counter log log_important log_actions sqlite_write hash_file get_metadata set_metadata increment_metadata add_pgid remove_pgid pgid_is_active kill_tree
     PARENT_PID=$$
-    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS CFG_FIND_DUPLICATES_BATCH_SIZE CFG_CLEAN_BATCH_SIZE
+    export CFG_DB CFG_DEDUPLICATION_ROOT CFG_LOG_FILE CFG_LOG_FILE_IMPORTANT CFG_LOG_FILE_ACTIONS CFG_LOG_FILE_ERRORS CFG_HASH_CMD CFG_REFLINK_CMD CFG_TMP_DIR CFG_LOCK_DIR state_file stepname max_duration max_count max_cores PARENT_PID start_epoch funcname CFG_PGID_FILE CFG_WATCH_PATHS_ABS CFG_DRY_RUN CFG_CONFLICTS_FILE skip CFG_WATCHER_DEBOUNCE_SECONDS CFG_FIND_DUPLICATES_BATCH_SIZE CFG_CLEAN_BATCH_SIZE
 
     # export tasks
     export -f clean_database initial_indexing find_duplicates watcher
@@ -987,6 +999,25 @@ schedule_task() {
 
         echo "$$" > "$CFG_TMP_DIR/last_scheduled_task_pid"
         echo "$(ps -o pgid= $$)" > "$CFG_TMP_DIR/last_scheduled_task_pgid"
+        mkdir -p "$CFG_TMP_DIR/pgid_to_main_pid"
+        echo "$$" > "$CFG_TMP_DIR/pgid_to_main_pid/$(cat "$CFG_TMP_DIR/last_scheduled_task_pgid").pid"
+
+        reopen_logs_child() {
+          # Flush before closing
+          sync
+
+          # Close old log descriptors
+          exec 4>&- 5>&- 6>&-
+          exec 1>&- 2>&-
+
+          # Now reopen to new files
+          exec 4>>"$CFG_LOG_FILE"
+          exec 5>>"$CFG_LOG_FILE_IMPORTANT"
+          exec 6>>"$CFG_LOG_FILE_ACTIONS"
+          exec >>"$CFG_LOG_FILE_ERRORS" 2>&1
+        }
+        trap "reopen_logs_child" HUP
+        reopen_logs_child
 
         # Write initial state
         echo "stepname=$stepname" > "$state_file"
@@ -1004,6 +1035,7 @@ schedule_task() {
 
         # remove pgid
         remove_pgid $(ps -o pgid= $$)
+        rm -f "$CFG_TMP_DIR/pgid_to_main_pid/$$.pid"
         log "Finished task: $stepname"
         log_important "Finished task: $stepname"
     ' &
@@ -1409,6 +1441,10 @@ initial_indexing() {
   while kill -0 $parallel_pid 2>/dev/null; do
     if [ -f $PROGRESS_COUNT_FILE ]; then
       last_count=$(cat "$PROGRESS_COUNT_FILE")
+      if [[ ! "$last_count" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
     fi
 
     if [ -f "$PROGRESS_TOTAL_FILE" ]; then
@@ -1609,6 +1645,10 @@ EOF
   while kill -0 $find_dupes_pid 2>/dev/null; do
     if [ -f $PROGRESS_COUNT_FILE ]; then
       last_count=$(cat "$PROGRESS_COUNT_FILE")
+      if [[ ! "$last_count" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
     fi
 
     if [ $last_count -gt $processed ]; then
@@ -2210,6 +2250,10 @@ reflink_duplicates() {
   while kill -0 $parallel_pid 2>/dev/null; do
     if [ -f $PROGRESS_COUNT_FILE ]; then
       last_count=$(cat "$PROGRESS_COUNT_FILE")
+      if [[ ! "$last_count" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
     fi
     if [ -f $PROGRESS_TOTAL_FILE ]; then
       total=$(cat "$PROGRESS_TOTAL_FILE")
@@ -2598,6 +2642,10 @@ watcher() {
   while true; do
     if [ -f $PROGRESS_COUNT_FILE ]; then
       last_count=$(cat "$PROGRESS_COUNT_FILE")
+      if [[ ! "$last_count" =~ ^-?[0-9]+$ ]]; then
+        sleep 0.1
+        continue
+      fi
     fi
     if [ -f "$PROGRESS_COUNT_FILE-queue" ]; then
       last_count_queue=$(cat "$PROGRESS_COUNT_FILE-queue")
