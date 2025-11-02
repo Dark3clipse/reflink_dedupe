@@ -25,7 +25,7 @@ Options:
       -h, --help            Show help options.
       -V, --version         Print program version.
 ----
-reflink_dedupe 0.9.3
+reflink_dedupe 0.9.4
 Copyright (C) 2025 Sophia Hadash
 Licensed under the BSD 2-Clause License. See LICENSE file for details.
 This is free software: you are free to change and redistribute it.
@@ -2829,12 +2829,13 @@ schedule_deduplication() {
 }
 main() {
   trap 'cleanup' INT TERM
+  trap 'reopen_logs_parent' HUP
   log "Starting ZFS dedupe daemon..."
 
   # init db
   init_db
 
-  #log_important "[DEBUG] Main: pid=$$ pgid=$(ps -o pgid= $$)"
+  log_important "[DEBUG] Main: pid=$$ pgid=$(ps -o pgid= $$)"
 
   # determine cores to use for tasks (except watcher)
   if [ $watcher -eq 1 ]; then
